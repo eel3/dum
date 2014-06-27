@@ -1,0 +1,215 @@
+<?xml version="1.0" standalone="yes" encoding="Shift_JIS" ?>
+
+<!--
+  @brief   diruse modoki
+  @author  eel3
+  @date    2012/08/29
+  @note    JScript on WSH 5.7 @ Windows XP Professional SP3
+-->
+
+<package>
+
+<job id="transxml">
+<runtime>
+  <description>DirUse Modoki - displays a list of disk usage for a directory tree(s).</description>
+  <named name="G" type="simple" required="false"
+         helpstring="Displays disk usage in gigabytes." />
+  <named name="M" type="simple" required="false"
+         helpstring="Displays disk usage in megabytes." />
+  <named name="K" type="simple" required="false"
+         helpstring="Displays disk usage in kilobytes." />
+  <named name="B" type="simple" required="false"
+         helpstring="Displays disk usage in bytes (default)." />
+  <named name="," type="simple" required="false"
+         helpstring="Use thousand separator when displaying sizes." />
+  <named name="*" type="simple" required="false"
+         helpstring="Uses the top-level directories residing in the specified DIRS." />
+  <unnamed name="DIRS" many="true" required="true"
+         helpstring="Specifies a list of the paths to check." />
+  <example><![CDATA[
+EXAMPLE : 
+    cscript dum.wsf \\?\C:\home
+    cscript dum.wsf /K /, /* \\?\C:\home
+]]></example>
+</runtime>
+
+<script language="JScript"><![CDATA[
+/*jslint continue: true, indent: 2, maxerr: 50, plusplus: true, windows: true */
+(function () {
+  'use strict';
+  /* ---------------------------------------------------------------------- */
+  // Function
+  /* ---------------------------------------------------------------------- */
+
+  /// Return script host name (probably cscript/wscript/WScript).
+  var scriptHost = (function () {
+      var fsys = WScript.CreateObject("Scripting.FileSystemObject"),
+        name = fsys.GetBaseName(WScript.FullName);
+      return function () { return name; };
+    }()),
+
+    /// Return true if this script is executed on Command Prompt.
+    isConsole = function () {
+      return (scriptHost() === "cscript");
+    },
+
+    // On wscript, available output function is WScript.Echo only.
+    // On cscript, you can use WScript.Echo and WScript.StdErr.WriteXXX.
+
+    /// Display message.
+    print = function (s) { WScript.Echo(s); },
+
+    /// Display error message.
+    eprint = (function () {
+      if (isConsole()) {
+        return function (s) { WScript.StdErr.WriteLine(s); };
+      } else {
+        return function (s) { WScript.Echo(s); };
+      }
+    }()),
+
+
+  /* ---------------------------------------------------------------------- */
+  // 
+  /* ---------------------------------------------------------------------- */
+
+    // Functions for unit of disk usage.
+    formatUnitBytes = function (n) { return n; },
+    formatUnitKiloBytes = function (n) { return n / 1024; },
+    formatUnitMegaBytes = function (n) { return n / 1024 / 1024; },
+    formatUnitGigaBytes = function (n) { return n / 1024 / 1024 / 1024; },
+    formatUnit = formatUnitBytes,
+
+    // Functions for thousand separator of disk usage.
+    formatNoSeps = function (n) { return n.toFixed(2); },
+    formatWithSeps = function (n) { return n.toLocaleString(); },
+    formatSeps = formatNoSeps,
+
+    // Functions for decimal part of disk usage.
+    formatNoDigits = function (s) { return s.replace(/\.\d\d$/, ""); },
+    formatWithDigits = function (s) { return s; },
+    formatDigits = formatNoDigits,
+
+    /// Format function for disk usage.
+    formatNumber = function (n) {
+      return formatDigits(formatSeps(formatUnit(n)));
+    },
+
+    /// Get some informations from `folder', and output them in CSV format.
+    makeCSVRecord = function (folder) {
+      return '"' + formatNumber(folder.Size) + '",' + folder.Path;
+    },
+
+    /// Estimate file space usage of folders under `folder', and output it in CSV format.
+    printSubdirSize = function (folder) {
+      var subdir;
+
+      for (subdir = new Enumerator(folder.SubFolders); !subdir.atEnd(); subdir.moveNext()) {
+        print(makeCSVRecord(subdir.item()));
+      }
+    },
+
+    /// Estimate file space usage under `folder', and output it in CSV format.
+    printDirSize = function (folder) {
+      print(makeCSVRecord(folder));
+    },
+
+    /// Display disk usage.
+    printDiskUsage = printDirSize,
+
+    /// Configure application according to `opts'.
+    configure = function (opts) {
+      var OPTSTABLE = [{
+          name: "B",
+          configure: function () {
+            formatUnit = formatUnitBytes;
+            formatDigits = formatNoDigits;
+          }
+        }, {
+          name: "K",
+          configure: function () {
+            formatUnit = formatUnitKiloBytes;
+            formatDigits = formatWithDigits;
+          }
+        }, {
+          name: "M",
+          configure: function () {
+            formatUnit = formatUnitMegaBytes;
+            formatDigits = formatWithDigits;
+          }
+        }, {
+          name: "G",
+          configure: function () {
+            formatUnit = formatUnitGigaBytes;
+            formatDigits = formatWithDigits;
+          }
+        }, {
+          name: ",",
+          configure: function () {
+            formatSeps = formatWithSeps;
+          }
+        }, {
+          name: "*",
+          configure: function () {
+            printDiskUsage = printSubdirSize;
+          }
+        }],
+        i,
+        len;
+
+      if (opts.length === 0) {
+        return;
+      }
+
+      for (i = 0, len = OPTSTABLE.length; i < len; ++i) {
+        if (opts.Exists(OPTSTABLE[i].name)) {
+          OPTSTABLE[i].configure();
+        }
+      }
+    };
+
+  /// Main routine.
+  WScript.Quit((function (progname, args) {
+    var EXIT_SUCCESS = 0,
+      EXIT_FAILURE = 1,
+      fsys = WScript.CreateObject("Scripting.FileSystemObject"),
+      opts = args.Named,
+      dirs = args.Unnamed,
+      i,
+      len,
+      path;
+
+    if (!isConsole()) {
+      eprint("Please use cscript.exe.");
+      return EXIT_FAILURE;
+    }
+
+    if (args.length === 0) {
+      eprint("Use option /? for display usage.");
+      return EXIT_FAILURE;
+    }
+
+    if (dirs.length === 0) {
+      eprint("No directory.");
+      return EXIT_FAILURE;
+    }
+
+    configure(opts);
+
+    for (i = 0, len = dirs.length; i < len; ++i) {
+      path = fsys.GetAbsolutePathName(dirs(i));
+      if (!fsys.FolderExists(path)) {
+        eprint(path + ": No such directory.");
+        continue;
+      }
+      printDiskUsage(fsys.GetFolder(path));
+    }
+
+    return EXIT_SUCCESS;
+
+  }(WScript.ScriptName, WScript.Arguments)));
+}());
+]]></script>
+</job>
+
+</package>
